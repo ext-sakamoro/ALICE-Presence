@@ -403,6 +403,31 @@ impl Default for PresenceConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Party info
+// ---------------------------------------------------------------------------
+
+/// Identity and location information for one party in a presence exchange.
+///
+/// Groups the three per-party parameters (`coord`, `secret`, `id`) that would
+/// otherwise appear as three separate arguments in protocol functions.
+#[derive(Debug, Clone, Copy)]
+pub struct PartyInfo {
+    /// Vivaldi network coordinate.
+    pub coord: VivaldiCoord,
+    /// Secret used for ZKP identity commitment.
+    pub secret: u64,
+    /// Compact 32-bit party identifier.
+    pub id: u32,
+}
+
+impl PartyInfo {
+    /// Create a new `PartyInfo`.
+    pub fn new(coord: VivaldiCoord, secret: u64, id: u32) -> Self {
+        Self { coord, secret, id }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Full protocol execution
 // ---------------------------------------------------------------------------
 
@@ -415,36 +440,32 @@ impl Default for PresenceConfig {
 ///
 /// Returns `None` if the parties are not within `config.proximity_threshold`.
 pub fn execute_presence_protocol(
-    coord_a: &VivaldiCoord,
-    secret_a: u64,
-    id_a: u32,
-    coord_b: &VivaldiCoord,
-    secret_b: u64,
-    id_b: u32,
+    party_a: &PartyInfo,
+    party_b: &PartyInfo,
     timestamp_ns: u64,
     config: &PresenceConfig,
 ) -> Option<CrossingRecord> {
     // 1. Proximity check.
-    let proximity = ProximityProof::prove(coord_a, coord_b, config.proximity_threshold);
+    let proximity = ProximityProof::prove(&party_a.coord, &party_b.coord, config.proximity_threshold);
     if !proximity.is_proximate {
         return None;
     }
 
     // 2. Identity commitments + ZKP exchange.
-    let nonce_a = fnv1a(&id_a.to_le_bytes());
-    let nonce_b = fnv1a(&id_b.to_le_bytes());
-    let commitment_a = IdentityCommitment::new(secret_a, nonce_a, timestamp_ns);
-    let commitment_b = IdentityCommitment::new(secret_b, nonce_b, timestamp_ns);
+    let nonce_a = fnv1a(&party_a.id.to_le_bytes());
+    let nonce_b = fnv1a(&party_b.id.to_le_bytes());
+    let commitment_a = IdentityCommitment::new(party_a.secret, nonce_a, timestamp_ns);
+    let commitment_b = IdentityCommitment::new(party_b.secret, nonce_b, timestamp_ns);
 
     // Challenges derived deterministically for reproducibility.
     let challenge_a = fnv1a(&timestamp_ns.to_le_bytes()) ^ 0xAAAA_AAAA_AAAA_AAAA;
     let challenge_b = fnv1a(&timestamp_ns.to_le_bytes()) ^ 0x5555_5555_5555_5555;
 
-    let proof_a = ZkProof::prove(secret_a, &commitment_a, challenge_a);
-    let proof_b = ZkProof::prove(secret_b, &commitment_b, challenge_b);
+    let proof_a = ZkProof::prove(party_a.secret, &commitment_a, challenge_a);
+    let proof_b = ZkProof::prove(party_b.secret, &commitment_b, challenge_b);
 
     // 3. Create the 18-byte event.
-    let mut event = PresenceEvent::new(id_a, id_b, timestamp_ns);
+    let mut event = PresenceEvent::new(party_a.id, party_b.id, timestamp_ns);
     if config.require_mutual {
         event.set_mutual();
     }
@@ -803,10 +824,10 @@ mod tests {
 
     #[test]
     fn protocol_proximate_succeeds() {
-        let a = VivaldiCoord::new(0.0, 0.0);
-        let b = VivaldiCoord::new(1.0, 1.0);
+        let a = PartyInfo::new(VivaldiCoord::new(0.0, 0.0), 42, 1);
+        let b = PartyInfo::new(VivaldiCoord::new(1.0, 1.0), 99, 2);
         let cfg = PresenceConfig::default();
-        let result = execute_presence_protocol(&a, 42, 1, &b, 99, 2, 1_000_000, &cfg);
+        let result = execute_presence_protocol(&a, &b, 1_000_000, &cfg);
         assert!(result.is_some());
         let record = result.unwrap();
         assert!(record.is_fully_verified());
@@ -817,37 +838,37 @@ mod tests {
 
     #[test]
     fn protocol_distant_returns_none() {
-        let a = VivaldiCoord::new(0.0, 0.0);
-        let b = VivaldiCoord::new(1000.0, 1000.0);
+        let a = PartyInfo::new(VivaldiCoord::new(0.0, 0.0), 42, 1);
+        let b = PartyInfo::new(VivaldiCoord::new(1000.0, 1000.0), 99, 2);
         let cfg = PresenceConfig::default();
-        let result = execute_presence_protocol(&a, 42, 1, &b, 99, 2, 1_000_000, &cfg);
+        let result = execute_presence_protocol(&a, &b, 1_000_000, &cfg);
         assert!(result.is_none());
     }
 
     #[test]
     fn protocol_custom_threshold() {
-        let a = VivaldiCoord::new(0.0, 0.0);
-        let b = VivaldiCoord::new(3.0, 4.0); // distance = 5.0
+        let a = PartyInfo::new(VivaldiCoord::new(0.0, 0.0), 1, 1);
+        let b = PartyInfo::new(VivaldiCoord::new(3.0, 4.0), 2, 2); // distance = 5.0
         let tight = PresenceConfig {
             proximity_threshold: 4.0,
             ..Default::default()
         };
-        assert!(execute_presence_protocol(&a, 1, 1, &b, 2, 2, 0, &tight).is_none());
+        assert!(execute_presence_protocol(&a, &b, 0, &tight).is_none());
 
         let loose = PresenceConfig {
             proximity_threshold: 6.0,
             ..Default::default()
         };
-        assert!(execute_presence_protocol(&a, 1, 1, &b, 2, 2, 0, &loose).is_some());
+        assert!(execute_presence_protocol(&a, &b, 0, &loose).is_some());
     }
 
     #[test]
     fn protocol_deterministic() {
-        let a = VivaldiCoord::new(1.0, 2.0);
-        let b = VivaldiCoord::new(3.0, 4.0);
+        let a = PartyInfo::new(VivaldiCoord::new(1.0, 2.0), 10, 1);
+        let b = PartyInfo::new(VivaldiCoord::new(3.0, 4.0), 20, 2);
         let cfg = PresenceConfig::default();
-        let r1 = execute_presence_protocol(&a, 10, 1, &b, 20, 2, 500, &cfg).unwrap();
-        let r2 = execute_presence_protocol(&a, 10, 1, &b, 20, 2, 500, &cfg).unwrap();
+        let r1 = execute_presence_protocol(&a, &b, 500, &cfg).unwrap();
+        let r2 = execute_presence_protocol(&a, &b, 500, &cfg).unwrap();
         assert_eq!(r1.content_hash, r2.content_hash);
     }
 
