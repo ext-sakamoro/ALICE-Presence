@@ -22,6 +22,7 @@ pub struct IdentityCommitment {
 
 impl IdentityCommitment {
     /// Create a commitment from a secret key and nonce.
+    #[must_use]
     pub fn new(secret: u64, nonce: u64, timestamp_ns: u64) -> Self {
         let mut buf = [0u8; 16];
         buf[..8].copy_from_slice(&secret.to_le_bytes());
@@ -35,6 +36,7 @@ impl IdentityCommitment {
     }
 
     /// Verify that a given secret matches this commitment.
+    #[must_use]
     pub fn verify(&self, secret: u64) -> bool {
         let mut buf = [0u8; 16];
         buf[..8].copy_from_slice(&secret.to_le_bytes());
@@ -66,6 +68,7 @@ impl ZkProof {
     ///
     /// The proof is marked `verified = true` when the commitment matches
     /// `H(secret || nonce)` (i.e. the prover genuinely knows the secret).
+    #[must_use]
     pub fn prove(secret: u64, commitment: &IdentityCommitment, challenge: u64) -> Self {
         let mut resp_buf = [0u8; 16];
         resp_buf[..8].copy_from_slice(&secret.to_le_bytes());
@@ -83,6 +86,7 @@ impl ZkProof {
     }
 
     /// Structural verification: fields are non-zero and internally consistent.
+    #[must_use]
     pub fn verify_structure(&self) -> bool {
         self.response != 0 && self.commitment != 0 && self.challenge != 0
     }

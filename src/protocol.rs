@@ -48,6 +48,7 @@ pub struct PartyInfo {
 
 impl PartyInfo {
     /// Create a new `PartyInfo`.
+    #[must_use]
     pub fn new(coord: VivaldiCoord, secret: u64, id: u32) -> Self {
         Self { coord, secret, id }
     }
@@ -59,10 +60,11 @@ impl PartyInfo {
 ///
 /// 1. Check proximity via Vivaldi coordinates.
 /// 2. Exchange ZKP identity proofs.
-/// 3. Create minimal PresenceEvent.
-/// 4. Build full CrossingRecord.
+/// 3. Create minimal `PresenceEvent`.
+/// 4. Build full `CrossingRecord`.
 ///
 /// Returns `None` if the parties are not within `config.proximity_threshold`.
+#[must_use]
 pub fn execute_presence_protocol(
     party_a: &PartyInfo,
     party_b: &PartyInfo,

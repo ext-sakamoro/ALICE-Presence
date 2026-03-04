@@ -21,11 +21,13 @@ pub struct VivaldiCoord {
 
 impl VivaldiCoord {
     /// Create a coordinate with height = 0.
+    #[must_use]
     pub fn new(x: f64, y: f64) -> Self {
         Self { x, y, height: 0.0 }
     }
 
     /// Create a coordinate with an explicit height (error) term.
+    #[must_use]
     pub fn with_height(x: f64, y: f64, height: f64) -> Self {
         Self {
             x,
@@ -35,6 +37,7 @@ impl VivaldiCoord {
     }
 
     /// Vivaldi distance: sqrt((x1-x2)^2 + (y1-y2)^2) + h1 + h2
+    #[must_use]
     pub fn distance(&self, other: &VivaldiCoord) -> f64 {
         let dx = self.x - other.x;
         let dy = self.y - other.y;
@@ -42,6 +45,7 @@ impl VivaldiCoord {
     }
 
     /// Hash the coordinate for privacy-preserving proofs.
+    #[must_use]
     pub fn hash(&self) -> u64 {
         let mut buf = [0u8; 24];
         buf[..8].copy_from_slice(&self.x.to_le_bytes());

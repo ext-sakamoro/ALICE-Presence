@@ -33,7 +33,7 @@ pub struct GroupProximityProof {
     pub max_distance: f64,
     /// Proximity threshold used.
     pub threshold: f64,
-    /// True if max_distance <= threshold (all pairs proximate).
+    /// True if `max_distance` <= threshold (all pairs proximate).
     pub all_proximate: bool,
     /// Deterministic content hash.
     pub content_hash: u64,
@@ -66,6 +66,7 @@ pub struct PresenceGroup {
 
 impl PresenceGroup {
     /// Create a new empty group.
+    #[must_use]
     pub fn new(config: GroupConfig) -> Self {
         Self {
             members: Vec::new(),
@@ -97,16 +98,19 @@ impl PresenceGroup {
     }
 
     /// Current member count.
+    #[must_use]
     pub fn member_count(&self) -> usize {
         self.members.len()
     }
 
     /// Check if a member with the given ID exists.
+    #[must_use]
     pub fn contains(&self, id: u32) -> bool {
         self.members.iter().any(|m| m.id == id)
     }
 
     /// Get member IDs (sorted).
+    #[must_use]
     pub fn member_ids(&self) -> Vec<u32> {
         let mut ids: Vec<u32> = self.members.iter().map(|m| m.id).collect();
         ids.sort_unstable();
@@ -115,6 +119,7 @@ impl PresenceGroup {
 
     /// Compute the maximum pairwise distance among all members.
     /// Returns 0.0 for 0 or 1 members.
+    #[must_use]
     pub fn max_pairwise_distance(&self) -> f64 {
         let n = self.members.len();
         if n < 2 {
@@ -133,12 +138,14 @@ impl PresenceGroup {
     }
 
     /// Check if all members are within the group proximity threshold.
+    #[must_use]
     pub fn is_all_proximate(&self) -> bool {
         self.max_pairwise_distance() <= self.config.proximity_threshold
     }
 
     /// Generate a group proximity proof.
     /// Returns `None` if fewer than `min_members` members.
+    #[must_use]
     pub fn prove_proximity(&self) -> Option<GroupProximityProof> {
         if self.members.len() < self.config.min_members {
             return None;

@@ -34,6 +34,7 @@ pub struct KdTree {
 impl KdTree {
     /// Build a k-d tree from a list of entries.
     /// O(N log N) construction.
+    #[must_use]
     pub fn build(entries: &[SpatialEntry]) -> Self {
         if entries.is_empty() {
             return Self {
@@ -95,21 +96,24 @@ impl KdTree {
     }
 
     /// Number of entries in the tree.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.nodes.len()
     }
 
     /// Is the tree empty?
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }
 
     /// Find the nearest neighbor to a query point.
     /// Returns `(id, distance)` or `None` if tree is empty.
+    #[must_use]
     pub fn nearest(&self, query: &VivaldiCoord) -> Option<(u32, f64)> {
         let root = self.root?;
         let mut best_id = self.nodes[root].entry.id;
-        let mut best_dist = self.vivaldi_dist(query, &self.nodes[root].entry.coord);
+        let mut best_dist = Self::vivaldi_dist(query, &self.nodes[root].entry.coord);
         self.nearest_recursive(root, query, &mut best_id, &mut best_dist);
         Some((best_id, best_dist))
     }
@@ -122,7 +126,7 @@ impl KdTree {
         best_dist: &mut f64,
     ) {
         let node = &self.nodes[node_idx];
-        let d = self.vivaldi_dist(query, &node.entry.coord);
+        let d = Self::vivaldi_dist(query, &node.entry.coord);
         if d < *best_dist {
             *best_dist = d;
             *best_id = node.entry.id;
@@ -158,6 +162,7 @@ impl KdTree {
 
     /// Find all entries within `radius` Vivaldi distance of the query point.
     /// Returns a Vec of `(id, distance)`.
+    #[must_use]
     pub fn range_query(&self, query: &VivaldiCoord, radius: f64) -> Vec<(u32, f64)> {
         let mut results = Vec::new();
         if let Some(root) = self.root {
@@ -174,7 +179,7 @@ impl KdTree {
         results: &mut Vec<(u32, f64)>,
     ) {
         let node = &self.nodes[node_idx];
-        let d = self.vivaldi_dist(query, &node.entry.coord);
+        let d = Self::vivaldi_dist(query, &node.entry.coord);
         if d <= radius {
             results.push((node.entry.id, d));
         }
@@ -207,6 +212,11 @@ impl KdTree {
     }
 
     /// Find k nearest neighbors. Returns sorted by distance (ascending).
+    ///
+    /// # Panics
+    ///
+    /// Panics if distance comparison yields `NaN`.
+    #[must_use]
     pub fn k_nearest(&self, query: &VivaldiCoord, k: usize) -> Vec<(u32, f64)> {
         if k == 0 || self.is_empty() {
             return Vec::new();
@@ -218,7 +228,7 @@ impl KdTree {
         let mut all: Vec<(u32, f64)> = self
             .nodes
             .iter()
-            .map(|n| (n.entry.id, self.vivaldi_dist(query, &n.entry.coord)))
+            .map(|n| (n.entry.id, Self::vivaldi_dist(query, &n.entry.coord)))
             .collect();
         all.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
         all.truncate(k);
@@ -226,7 +236,7 @@ impl KdTree {
     }
 
     /// Vivaldi distance (includes height terms).
-    fn vivaldi_dist(&self, a: &VivaldiCoord, b: &VivaldiCoord) -> f64 {
+    fn vivaldi_dist(a: &VivaldiCoord, b: &VivaldiCoord) -> f64 {
         a.distance(b)
     }
 }

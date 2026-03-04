@@ -30,6 +30,7 @@ pub struct ProximityProof {
 
 impl ProximityProof {
     /// Generate a proximity proof between two coordinates.
+    #[must_use]
     pub fn prove(coord_a: &VivaldiCoord, coord_b: &VivaldiCoord, threshold: f64) -> Self {
         let distance = coord_a.distance(coord_b);
         let is_proximate = distance <= threshold;
@@ -76,6 +77,7 @@ pub struct PresenceEvent {
 
 impl PresenceEvent {
     /// Create a new presence event with default flags.
+    #[must_use]
     pub fn new(party_a_id: u32, party_b_id: u32, timestamp_ns: u64) -> Self {
         Self {
             event_type: 0x50,
@@ -98,19 +100,23 @@ impl PresenceEvent {
         self.flags |= 0b0000_0100;
     }
 
+    #[must_use]
     pub fn is_mutual(&self) -> bool {
         self.flags & 0b0000_0001 != 0
     }
 
+    #[must_use]
     pub fn is_verified(&self) -> bool {
         self.flags & 0b0000_0010 != 0
     }
 
+    #[must_use]
     pub fn is_proximate(&self) -> bool {
         self.flags & 0b0000_0100 != 0
     }
 
     /// Serialize to exactly 18 bytes.
+    #[must_use]
     pub fn to_bytes(&self) -> [u8; 18] {
         let mut out = [0u8; 18];
         out[0] = self.event_type;
@@ -122,6 +128,7 @@ impl PresenceEvent {
     }
 
     /// Deserialize from exactly 18 bytes.
+    #[must_use]
     pub fn from_bytes(bytes: &[u8; 18]) -> Self {
         let event_type = bytes[0];
         let flags = bytes[1];
@@ -140,6 +147,7 @@ impl PresenceEvent {
     }
 
     /// Wire size (always 18).
+    #[must_use]
     pub fn byte_size() -> usize {
         18
     }
@@ -179,6 +187,7 @@ pub struct CrossingRecord {
 
 impl CrossingRecord {
     /// Build a full crossing record from component proofs.
+    #[must_use]
     pub fn new(
         event: PresenceEvent,
         proof_a: ZkProof,
@@ -204,11 +213,13 @@ impl CrossingRecord {
     }
 
     /// Fully verified: both ZKPs verified + proximity confirmed.
+    #[must_use]
     pub fn is_fully_verified(&self) -> bool {
         self.proof_a.verified && self.proof_b.verified && self.proximity.is_proximate
     }
 
     /// Derive the crossing status from the current state of the record.
+    #[must_use]
     pub fn status(&self) -> CrossingStatus {
         if !self.event.is_mutual() {
             return CrossingStatus::Initiated;

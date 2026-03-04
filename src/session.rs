@@ -87,6 +87,7 @@ pub struct Session {
 
 impl Session {
     /// Create a new session in Idle state.
+    #[must_use]
     pub fn new(local_id: u32, timestamp_ns: u64, config: SessionConfig) -> Self {
         let mut buf = [0u8; 12];
         buf[..4].copy_from_slice(&local_id.to_le_bytes());
@@ -158,6 +159,7 @@ impl Session {
     }
 
     /// Check if the current phase has timed out.
+    #[must_use]
     pub fn is_timed_out(&self, current_ns: u64) -> bool {
         if self.state == SessionState::Idle || self.state == SessionState::Closed {
             return false;
@@ -181,16 +183,19 @@ impl Session {
     }
 
     /// Duration (ns) spent in the current state.
+    #[must_use]
     pub fn state_duration_ns(&self, current_ns: u64) -> u64 {
         current_ns.saturating_sub(self.state_entered_ns)
     }
 
     /// Total session duration (ns) from creation.
+    #[must_use]
     pub fn total_duration_ns(&self, current_ns: u64) -> u64 {
         current_ns.saturating_sub(self.created_ns)
     }
 
     /// Is this session still active (not Closed)?
+    #[must_use]
     pub fn is_active(&self) -> bool {
         self.state != SessionState::Closed
     }
