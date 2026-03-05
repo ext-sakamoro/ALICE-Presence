@@ -87,7 +87,7 @@ impl ZkProof {
 
     /// Structural verification: fields are non-zero and internally consistent.
     #[must_use]
-    pub fn verify_structure(&self) -> bool {
+    pub const fn verify_structure(&self) -> bool {
         self.response != 0 && self.commitment != 0 && self.challenge != 0
     }
 }

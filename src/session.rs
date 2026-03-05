@@ -184,13 +184,13 @@ impl Session {
 
     /// Duration (ns) spent in the current state.
     #[must_use]
-    pub fn state_duration_ns(&self, current_ns: u64) -> u64 {
+    pub const fn state_duration_ns(&self, current_ns: u64) -> u64 {
         current_ns.saturating_sub(self.state_entered_ns)
     }
 
     /// Total session duration (ns) from creation.
     #[must_use]
-    pub fn total_duration_ns(&self, current_ns: u64) -> u64 {
+    pub const fn total_duration_ns(&self, current_ns: u64) -> u64 {
         current_ns.saturating_sub(self.created_ns)
     }
 
@@ -345,6 +345,64 @@ mod tests {
         let s2 = Session::new(1, 1000, SessionConfig::default());
         assert_eq!(s1.content_hash, s2.content_hash);
         assert_eq!(s1.session_id, s2.session_id);
+    }
+
+    #[test]
+    fn session_id_differs_for_different_local_id() {
+        let s1 = Session::new(1, 1000, SessionConfig::default());
+        let s2 = Session::new(2, 1000, SessionConfig::default());
+        assert_ne!(s1.session_id, s2.session_id);
+    }
+
+    #[test]
+    fn session_id_differs_for_different_timestamp() {
+        let s1 = Session::new(1, 1000, SessionConfig::default());
+        let s2 = Session::new(1, 2000, SessionConfig::default());
+        assert_ne!(s1.session_id, s2.session_id);
+    }
+
+    #[test]
+    fn retry_counter_resets_on_discover() {
+        let mut s = Session::new(1, 0, SessionConfig::default());
+        // Burn retries in Idle state before transitioning
+        s.retry();
+        s.retry();
+        assert_eq!(s.retries, 2);
+        // discover() must reset the retry counter
+        s.discover(2, 100);
+        assert_eq!(s.retries, 0);
+    }
+
+    #[test]
+    fn retry_counter_resets_on_begin_exchange() {
+        let mut s = Session::new(1, 0, SessionConfig::default());
+        s.discover(2, 100);
+        s.retry();
+        assert_eq!(s.retries, 1);
+        s.begin_exchange(200);
+        assert_eq!(s.retries, 0);
+    }
+
+    #[test]
+    fn verified_state_never_times_out() {
+        // Verified is not a timeout-able state — is_timed_out must return false
+        // regardless of elapsed time.
+        let cfg = SessionConfig {
+            exchange_timeout_ns: 1,
+            ..Default::default()
+        };
+        let mut s = Session::new(1, 0, cfg);
+        s.discover(2, 0);
+        s.begin_exchange(0);
+        s.verify(0);
+        assert!(!s.is_timed_out(999_999_999_999));
+    }
+
+    #[test]
+    fn state_duration_saturates_on_underflow() {
+        // state_duration_ns uses saturating_sub; current_ns < state_entered_ns must yield 0
+        let s = Session::new(1, 5000, SessionConfig::default());
+        assert_eq!(s.state_duration_ns(1000), 0);
     }
 
     #[test]

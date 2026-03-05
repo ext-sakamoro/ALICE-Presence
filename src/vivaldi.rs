@@ -22,7 +22,7 @@ pub struct VivaldiCoord {
 impl VivaldiCoord {
     /// Create a coordinate with height = 0.
     #[must_use]
-    pub fn new(x: f64, y: f64) -> Self {
+    pub const fn new(x: f64, y: f64) -> Self {
         Self { x, y, height: 0.0 }
     }
 
@@ -38,10 +38,10 @@ impl VivaldiCoord {
 
     /// Vivaldi distance: sqrt((x1-x2)^2 + (y1-y2)^2) + h1 + h2
     #[must_use]
-    pub fn distance(&self, other: &VivaldiCoord) -> f64 {
+    pub fn distance(&self, other: &Self) -> f64 {
         let dx = self.x - other.x;
         let dy = self.y - other.y;
-        (dx * dx + dy * dy).sqrt() + self.height + other.height
+        dx.hypot(dy) + self.height + other.height
     }
 
     /// Hash the coordinate for privacy-preserving proofs.
@@ -58,7 +58,7 @@ impl VivaldiCoord {
     ///
     /// `rtt` is the measured round-trip time (distance), `cc` is the
     /// adaptive timestep (typically 0.01..0.25).
-    pub fn update(&mut self, other: &VivaldiCoord, rtt: f64, cc: f64) {
+    pub fn update(&mut self, other: &Self, rtt: f64, cc: f64) {
         let predicted = self.distance(other);
         let error = rtt - predicted;
         if predicted < 1e-15 {
@@ -68,7 +68,7 @@ impl VivaldiCoord {
         } else {
             let dx = self.x - other.x;
             let dy = self.y - other.y;
-            let euclidean = (dx * dx + dy * dy).sqrt();
+            let euclidean = dx.hypot(dy);
             if euclidean < 1e-15 {
                 self.x += cc * error * 0.5;
                 self.y += cc * error * 0.5;
@@ -183,6 +183,41 @@ mod tests {
         let b = VivaldiCoord::new(0.0, 0.0);
         // Should not panic even when both at origin
         a.update(&b, 5.0, 0.1);
+        assert!(a.x.is_finite());
+        assert!(a.y.is_finite());
+    }
+
+    #[test]
+    fn with_height_zero_same_as_new() {
+        // with_height(..., 0.0) should produce identical distance behaviour to new()
+        let a = VivaldiCoord::with_height(3.0, 7.0, 0.0);
+        let b = VivaldiCoord::new(3.0, 7.0);
+        assert!((a.distance(&b)).abs() < 1e-12);
+        assert_eq!(a.height, b.height);
+    }
+
+    #[test]
+    fn distance_large_values() {
+        // Euclidean distance at scale ~1e6 should remain accurate
+        let a = VivaldiCoord::new(1_000_000.0, 0.0);
+        let b = VivaldiCoord::new(0.0, 0.0);
+        assert!((a.distance(&b) - 1_000_000.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn update_height_stays_nonneg_after_negative_error() {
+        // When RTT << predicted distance, the error is large and negative.
+        // The height must never underflow below 0.
+        let mut a = VivaldiCoord::with_height(0.0, 0.0, 10.0);
+        let b = VivaldiCoord::new(100.0, 0.0);
+        for _ in 0..50 {
+            a.update(&b, 5.0, 0.3);
+        }
+        assert!(
+            a.height >= 0.0,
+            "height must never go below 0, got {}",
+            a.height
+        );
         assert!(a.x.is_finite());
         assert!(a.y.is_finite());
     }

@@ -97,13 +97,13 @@ impl KdTree {
 
     /// Number of entries in the tree.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.nodes.len()
     }
 
     /// Is the tree empty?
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }
 
@@ -403,5 +403,17 @@ mod tests {
         let tree = KdTree::build(&entries);
         let (id, _) = tree.nearest(&VivaldiCoord::new(12.0, 0.0)).unwrap();
         assert_eq!(id, 3); // closest to x=10
+    }
+
+    #[test]
+    fn range_query_exact_boundary_included() {
+        // An entry whose Vivaldi distance equals the radius exactly must be included (<=).
+        let entries = vec![entry(1, 5.0, 0.0), entry(2, 15.0, 0.0)];
+        let tree = KdTree::build(&entries);
+        // Distance from (0,0) to (5,0) is exactly 5.0
+        let results = tree.range_query(&VivaldiCoord::new(0.0, 0.0), 5.0);
+        let ids: Vec<u32> = results.iter().map(|r| r.0).collect();
+        assert!(ids.contains(&1), "entry at exact boundary must be included");
+        assert!(!ids.contains(&2), "entry beyond boundary must be excluded");
     }
 }

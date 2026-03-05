@@ -1,11 +1,5 @@
 // テストコードではリテラルやf32比較でpedantic警告が出るため抑制
-#![cfg_attr(
-    test,
-    allow(
-        clippy::unreadable_literal,
-        clippy::float_cmp,
-    )
-)]
+#![cfg_attr(test, allow(clippy::unreadable_literal, clippy::float_cmp,))]
 #![allow(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,

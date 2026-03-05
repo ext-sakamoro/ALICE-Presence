@@ -67,7 +67,7 @@ pub struct PresenceGroup {
 impl PresenceGroup {
     /// Create a new empty group.
     #[must_use]
-    pub fn new(config: GroupConfig) -> Self {
+    pub const fn new(config: GroupConfig) -> Self {
         Self {
             members: Vec::new(),
             config,
@@ -99,7 +99,7 @@ impl PresenceGroup {
 
     /// Current member count.
     #[must_use]
-    pub fn member_count(&self) -> usize {
+    pub const fn member_count(&self) -> usize {
         self.members.len()
     }
 
@@ -358,5 +358,42 @@ mod tests {
         let p1 = g1.prove_proximity().unwrap();
         let p2 = g2.prove_proximity().unwrap();
         assert_ne!(p1.group_id, p2.group_id);
+    }
+
+    #[test]
+    fn max_pairwise_distance_empty_group() {
+        // Zero members — must return 0.0 without panic
+        let g = PresenceGroup::new(GroupConfig::default());
+        assert!((g.max_pairwise_distance() - 0.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn prove_proximity_not_all_proximate() {
+        // Proof is generated but all_proximate must be false when spread exceeds threshold
+        let cfg = GroupConfig {
+            proximity_threshold: 2.0,
+            min_members: 2,
+        };
+        let mut g = PresenceGroup::new(cfg);
+        g.add_member(1, make_coord(0.0, 0.0), 0);
+        g.add_member(2, make_coord(100.0, 0.0), 0);
+        let proof = g.prove_proximity().unwrap();
+        assert!(!proof.all_proximate);
+        assert_eq!(proof.member_count, 2);
+        assert!((proof.max_distance - 100.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn prove_proximity_exactly_at_threshold() {
+        // Distance == threshold must count as proximate (<=)
+        let cfg = GroupConfig {
+            proximity_threshold: 5.0,
+            min_members: 2,
+        };
+        let mut g = PresenceGroup::new(cfg);
+        g.add_member(1, make_coord(0.0, 0.0), 0);
+        g.add_member(2, make_coord(5.0, 0.0), 0);
+        let proof = g.prove_proximity().unwrap();
+        assert!(proof.all_proximate);
     }
 }

@@ -49,7 +49,7 @@ pub struct PartyInfo {
 impl PartyInfo {
     /// Create a new `PartyInfo`.
     #[must_use]
-    pub fn new(coord: VivaldiCoord, secret: u64, id: u32) -> Self {
+    pub const fn new(coord: VivaldiCoord, secret: u64, id: u32) -> Self {
         Self { coord, secret, id }
     }
 }
@@ -176,5 +176,36 @@ mod tests {
         };
         let record = execute_presence_protocol(&a, &b, 100, &cfg).unwrap();
         assert!(!record.event.is_mutual());
+    }
+
+    #[test]
+    fn protocol_same_coords_is_proximate() {
+        // Two parties at the exact same coordinate: distance == 0, always within any threshold
+        let a = PartyInfo::new(VivaldiCoord::new(5.0, 5.0), 1, 1);
+        let b = PartyInfo::new(VivaldiCoord::new(5.0, 5.0), 2, 2);
+        let cfg = PresenceConfig::default();
+        let record = execute_presence_protocol(&a, &b, 0, &cfg).unwrap();
+        assert!(record.is_fully_verified());
+        assert!((record.proximity.distance).abs() < 1e-12);
+    }
+
+    #[test]
+    fn protocol_boundary_threshold_exclusive() {
+        // Distance exactly equal to threshold must succeed (ProximityProof uses <=)
+        let a = PartyInfo::new(VivaldiCoord::new(0.0, 0.0), 1, 1);
+        let b = PartyInfo::new(VivaldiCoord::new(10.0, 0.0), 2, 2);
+        // With threshold == 10.0, distance == 10.0 → proximate
+        let cfg_exact = PresenceConfig {
+            proximity_threshold: 10.0,
+            ..Default::default()
+        };
+        assert!(execute_presence_protocol(&a, &b, 0, &cfg_exact).is_some());
+
+        // With threshold == 9.999..., distance > threshold → not proximate
+        let cfg_tight = PresenceConfig {
+            proximity_threshold: 9.999,
+            ..Default::default()
+        };
+        assert!(execute_presence_protocol(&a, &b, 0, &cfg_tight).is_none());
     }
 }
