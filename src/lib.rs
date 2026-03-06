@@ -48,8 +48,11 @@ pub mod event;
 pub mod group;
 pub mod identity;
 pub mod protocol;
+pub mod replay_guard;
+pub mod serialize;
 pub mod session;
 pub mod spatial;
+pub mod verification;
 pub mod vivaldi;
 
 pub use event::{CrossingRecord, CrossingStatus, PresenceEvent, ProximityProof};
