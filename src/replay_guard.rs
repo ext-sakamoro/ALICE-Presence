@@ -103,12 +103,7 @@ impl ReplayGuard {
     }
 
     /// タイムスタンプ + nonce の総合検証。
-    pub fn validate(
-        &mut self,
-        event_bytes: &[u8],
-        event_ns: u64,
-        now_ns: u64,
-    ) -> ReplayResult {
+    pub fn validate(&mut self, event_bytes: &[u8], event_ns: u64, now_ns: u64) -> ReplayResult {
         let ts = self.check_timestamp(event_ns, now_ns);
         if ts != TimestampResult::Valid {
             return ReplayResult::TimestampInvalid(ts);

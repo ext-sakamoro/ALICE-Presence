@@ -168,7 +168,7 @@ mod tests {
     fn tampered_proximity_in_record() {
         let mut record = make_valid_record();
         record.proximity.content_hash ^= 1; // proximity hash 改ざん
-        // record hash は再計算しないのでまず record hash が不一致
+                                            // record hash は再計算しないのでまず record hash が不一致
         assert_eq!(verify_record(&record), VerifyResult::HashMismatch);
     }
 
