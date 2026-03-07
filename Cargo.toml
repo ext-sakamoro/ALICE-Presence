@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Moroya Sakamoto"]
 description = "Phase synchronization of presence — cryptographic proof of encounter via ZKP, Vivaldi coordinates, and minimal P2P sync"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/ext-sakamoro/ALICE-Presence"
 keywords = ["presence", "zkp", "vivaldi", "p2p", "proximity"]
 
