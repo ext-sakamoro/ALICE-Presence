@@ -15,33 +15,33 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --lib --tests
+      - uses: dtolnay/rust-toolchain@1.92.0
+      - run: cargo test --all-features
 
   clippy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.92.0
         with:
           components: clippy
-      - run: cargo clippy --lib --tests -- -W clippy::all -W clippy::pedantic
+      - run: cargo clippy --all-targets --all-features -- -W clippy::all -W clippy::pedantic -W clippy::nursery
 
   fmt:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.92.0
         with:
           components: rustfmt
-      - run: cargo fmt -- --check
+      - run: cargo fmt --all -- --check
 
   doc:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo doc --no-deps
+      - uses: dtolnay/rust-toolchain@1.92.0
+      - run: cargo doc --no-deps --all-features
         env:
           RUSTDOCFLAGS: "-Dwarnings"
 
