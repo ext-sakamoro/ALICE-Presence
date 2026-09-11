@@ -66,9 +66,9 @@ impl KdTree {
         // Sort by current axis
         let slice = &mut entries[start..end];
         if axis == 0 {
-            slice.sort_unstable_by(|a, b| a.coord.x.partial_cmp(&b.coord.x).unwrap());
+            slice.sort_unstable_by(|a, b| a.coord.x.total_cmp(&b.coord.x));
         } else {
-            slice.sort_unstable_by(|a, b| a.coord.y.partial_cmp(&b.coord.y).unwrap());
+            slice.sort_unstable_by(|a, b| a.coord.y.total_cmp(&b.coord.y));
         }
 
         let mid = start + len / 2;
@@ -230,7 +230,7 @@ impl KdTree {
             .iter()
             .map(|n| (n.entry.id, Self::vivaldi_dist(query, &n.entry.coord)))
             .collect();
-        all.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        all.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
         all.truncate(k);
         all
     }

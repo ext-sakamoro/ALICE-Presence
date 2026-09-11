@@ -17,9 +17,9 @@ fn main() {
         cfg.proximity_threshold, cfg.challenge_bits, cfg.require_mutual
     );
 
-    let alice = PartyInfo::new(VivaldiCoord::new(0.0, 0.0), 0xA11CE_5EC, 1);
-    let bob = PartyInfo::new(VivaldiCoord::new(3.0, 4.0), 0xB0B_5EC, 2);
-    let charlie = PartyInfo::new(VivaldiCoord::new(80.0, 80.0), 0xC4A_5EC, 3);
+    let alice = PartyInfo::new(VivaldiCoord::new(0.0, 0.0), 0xA11C_E5EC, 1);
+    let bob = PartyInfo::new(VivaldiCoord::new(3.0, 4.0), 0x0B0B_5EC0, 2);
+    let charlie = PartyInfo::new(VivaldiCoord::new(80.0, 80.0), 0x0C4A_5EC0, 3);
 
     let ts_ns: u64 = 1_723_000_000_000_000_000;
 
