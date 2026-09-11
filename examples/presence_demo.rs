@@ -31,18 +31,9 @@ fn main() {
                 "distance         = {:.4}  (threshold {})",
                 rec.proximity.distance, rec.proximity.threshold
             );
-            println!(
-                "is_proximate     = {}",
-                rec.proximity.is_proximate
-            );
-            println!(
-                "coord_hash_a     = 0x{:016x}",
-                rec.proximity.coord_hash_a
-            );
-            println!(
-                "coord_hash_b     = 0x{:016x}",
-                rec.proximity.coord_hash_b
-            );
+            println!("is_proximate     = {}", rec.proximity.is_proximate);
+            println!("coord_hash_a     = 0x{:016x}", rec.proximity.coord_hash_a);
+            println!("coord_hash_b     = 0x{:016x}", rec.proximity.coord_hash_b);
             println!("proof_a.verified = {}", rec.proof_a.verified);
             println!("proof_b.verified = {}", rec.proof_b.verified);
             println!(
