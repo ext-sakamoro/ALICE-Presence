@@ -24,7 +24,7 @@ cargo run --example presence_demo
 
 ## Tests
 
-35 tests covering coordinates, commitments, proofs, events, records, protocol execution, and edge cases.
+137 unit tests + 1 doctest covering coordinates, commitments, proofs, events, records, protocol execution, group proximity, session FSM, spatial index, replay guard, serialization, and edge cases.
 
 ```
 cargo test
