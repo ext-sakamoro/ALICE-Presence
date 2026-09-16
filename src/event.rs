@@ -1,12 +1,12 @@
 //! Presence events and crossing records
 //!
 //! Minimal 18-byte presence events for P2P sync and permanent
-//! crossing records with ZKP verification.
+//! crossing records carrying both parties' Ed25519 challenge-response proofs.
 //!
 //! Author: Moroya Sakamoto
 
-use crate::fnv1a;
-use crate::identity::ZkProof;
+use crate::hash64;
+use crate::identity::{Challenge, ChallengeProof, PublicKey};
 use crate::vivaldi::VivaldiCoord;
 
 // ── Proximity Proof ────────────────────────────────────────────────────
@@ -24,7 +24,7 @@ pub struct ProximityProof {
     pub coord_hash_a: u64,
     /// Hash of party B's coordinate (privacy).
     pub coord_hash_b: u64,
-    /// Hash of the entire proof payload.
+    /// `hash64` of [`Self::canonical_bytes`] — an identifier, not authentication.
     pub content_hash: u64,
 }
 
@@ -36,14 +36,13 @@ impl ProximityProof {
         let is_proximate = distance <= threshold;
         let coord_hash_a = coord_a.hash();
         let coord_hash_b = coord_b.hash();
-
-        let mut buf = [0u8; 40];
-        buf[..8].copy_from_slice(&distance.to_le_bytes());
-        buf[8..16].copy_from_slice(&threshold.to_le_bytes());
-        buf[16..24].copy_from_slice(&coord_hash_a.to_le_bytes());
-        buf[24..32].copy_from_slice(&coord_hash_b.to_le_bytes());
-        buf[32..40].copy_from_slice(&(is_proximate as u64).to_le_bytes());
-        let content_hash = fnv1a(&buf);
+        let content_hash = hash64(&Self::payload_bytes(
+            distance,
+            threshold,
+            coord_hash_a,
+            coord_hash_b,
+            is_proximate,
+        ));
 
         Self {
             distance,
@@ -53,6 +52,43 @@ impl ProximityProof {
             coord_hash_b,
             content_hash,
         }
+    }
+
+    fn payload_bytes(
+        distance: f64,
+        threshold: f64,
+        coord_hash_a: u64,
+        coord_hash_b: u64,
+        is_proximate: bool,
+    ) -> [u8; 40] {
+        let mut buf = [0u8; 40];
+        buf[..8].copy_from_slice(&distance.to_le_bytes());
+        buf[8..16].copy_from_slice(&threshold.to_le_bytes());
+        buf[16..24].copy_from_slice(&coord_hash_a.to_le_bytes());
+        buf[24..32].copy_from_slice(&coord_hash_b.to_le_bytes());
+        buf[32..40].copy_from_slice(&u64::from(is_proximate).to_le_bytes());
+        buf
+    }
+
+    /// Canonical 40-byte payload (everything except `content_hash`). This is
+    /// what enters the signed transcript, so any change to distance /
+    /// threshold / coordinate hashes / the proximate bit after signing is
+    /// detected by signature verification.
+    #[must_use]
+    pub fn canonical_bytes(&self) -> [u8; 40] {
+        Self::payload_bytes(
+            self.distance,
+            self.threshold,
+            self.coord_hash_a,
+            self.coord_hash_b,
+            self.is_proximate,
+        )
+    }
+
+    /// Recompute `content_hash` from the payload and compare.
+    #[must_use]
+    pub fn content_hash_matches(&self) -> bool {
+        hash64(&self.canonical_bytes()) == self.content_hash
     }
 }
 
@@ -88,12 +124,15 @@ impl PresenceEvent {
         }
     }
 
+    /// Flag bit set once both proofs were checked by the verifier.
+    pub const FLAG_VERIFIED: u8 = 0b0000_0010;
+
     pub const fn set_mutual(&mut self) {
         self.flags |= 0b0000_0001;
     }
 
     pub const fn set_verified(&mut self) {
-        self.flags |= 0b0000_0010;
+        self.flags |= Self::FLAG_VERIFIED;
     }
 
     pub const fn set_proximate(&mut self) {
@@ -124,6 +163,16 @@ impl PresenceEvent {
         out[2..6].copy_from_slice(&self.party_a_id.to_le_bytes());
         out[6..10].copy_from_slice(&self.party_b_id.to_le_bytes());
         out[10..18].copy_from_slice(&self.timestamp_ns.to_le_bytes());
+        out
+    }
+
+    /// The 18 wire bytes with the `verified` flag cleared — the form that
+    /// enters the signed transcript. `verified` is set *after* both signatures
+    /// have been checked, so it cannot be part of what is signed.
+    #[must_use]
+    pub fn to_bytes_unverified(&self) -> [u8; 18] {
+        let mut out = self.to_bytes();
+        out[1] &= !Self::FLAG_VERIFIED;
         out
     }
 
@@ -162,7 +211,7 @@ pub enum CrossingStatus {
     Initiated,
     /// Both parties confirmed.
     Mutual,
-    /// ZKP verified on both sides.
+    /// Both signatures verified.
     Verified,
     /// Written to permanent store.
     Recorded,
@@ -172,16 +221,46 @@ pub enum CrossingStatus {
 
 // ── Crossing Record ────────────────────────────────────────────────────
 
+/// Bytes both parties sign for one encounter:
+///
+/// `event (18, verified bit cleared) || proximity canonical (40) || pk_a (32) || pk_b (32) || challenge_a (32) || challenge_b (32)`
+///
+/// Binding both keys and both challenges into what each side signs means a
+/// proof cannot be lifted out of this record and reused with another
+/// counterpart, timestamp or challenge.
+#[must_use]
+pub fn encounter_transcript(
+    event: &PresenceEvent,
+    proximity: &ProximityProof,
+    pk_a: &PublicKey,
+    pk_b: &PublicKey,
+    challenge_a: &Challenge,
+    challenge_b: &Challenge,
+) -> [u8; 186] {
+    let mut out = [0u8; 186];
+    out[..18].copy_from_slice(&event.to_bytes_unverified());
+    out[18..58].copy_from_slice(&proximity.canonical_bytes());
+    out[58..90].copy_from_slice(pk_a);
+    out[90..122].copy_from_slice(pk_b);
+    out[122..154].copy_from_slice(challenge_a.as_bytes());
+    out[154..186].copy_from_slice(challenge_b.as_bytes());
+    out
+}
+
 /// Permanent crossing record — the full record stored in DB.
+///
+/// Nothing in this struct is self-certifying: call
+/// [`crate::verification::verify_record`] before trusting it.
 #[derive(Debug, Clone, Copy)]
 pub struct CrossingRecord {
     pub event: PresenceEvent,
-    /// Party A's identity proof.
-    pub proof_a: ZkProof,
-    /// Party B's identity proof.
-    pub proof_b: ZkProof,
+    /// Party A's challenge-response proof (answers the challenge B issued).
+    pub proof_a: ChallengeProof,
+    /// Party B's challenge-response proof (answers the challenge A issued).
+    pub proof_b: ChallengeProof,
     pub proximity: ProximityProof,
-    /// Hash of the entire record.
+    /// `hash64` over the transcript and both signatures — a storage /
+    /// de-duplication identifier, not authentication.
     pub content_hash: u64,
 }
 
@@ -190,45 +269,56 @@ impl CrossingRecord {
     #[must_use]
     pub fn new(
         event: PresenceEvent,
-        proof_a: ZkProof,
-        proof_b: ZkProof,
+        proof_a: ChallengeProof,
+        proof_b: ChallengeProof,
         proximity: ProximityProof,
     ) -> Self {
-        let ev_bytes = event.to_bytes();
-        let mut buf = Vec::with_capacity(18 + 8 * 4);
-        buf.extend_from_slice(&ev_bytes);
-        buf.extend_from_slice(&proof_a.response.to_le_bytes());
-        buf.extend_from_slice(&proof_b.response.to_le_bytes());
-        buf.extend_from_slice(&proximity.content_hash.to_le_bytes());
-        buf.extend_from_slice(&proximity.distance.to_le_bytes());
-        let content_hash = fnv1a(&buf);
-
-        Self {
+        let mut record = Self {
             event,
             proof_a,
             proof_b,
             proximity,
-            content_hash,
-        }
+            content_hash: 0,
+        };
+        record.content_hash = record.compute_content_hash();
+        record
     }
 
-    /// Fully verified: both ZKPs verified + proximity confirmed.
+    /// The transcript both parties signed, rebuilt from the record's own
+    /// fields (event, proximity, the keys and challenges inside the proofs).
     #[must_use]
-    pub const fn is_fully_verified(&self) -> bool {
-        self.proof_a.verified && self.proof_b.verified && self.proximity.is_proximate
+    pub fn transcript(&self) -> [u8; 186] {
+        encounter_transcript(
+            &self.event,
+            &self.proximity,
+            &self.proof_a.public_key,
+            &self.proof_b.public_key,
+            &self.proof_a.challenge,
+            &self.proof_b.challenge,
+        )
     }
 
-    /// Derive the crossing status from the current state of the record.
+    /// Identifier hash over transcript + both signatures.
+    #[must_use]
+    pub fn compute_content_hash(&self) -> u64 {
+        let mut buf = Vec::with_capacity(186 + 64 * 2);
+        buf.extend_from_slice(&self.transcript());
+        buf.extend_from_slice(&self.proof_a.signature);
+        buf.extend_from_slice(&self.proof_b.signature);
+        hash64(&buf)
+    }
+
+    /// Derive the crossing status from the event flags.
+    ///
+    /// The flags are set by the protocol runner *after* verification; they
+    /// are a summary, not evidence. Verify the record before reading them.
     #[must_use]
     pub const fn status(&self) -> CrossingStatus {
         if !self.event.is_mutual() {
             return CrossingStatus::Initiated;
         }
-        if !self.proof_a.verified || !self.proof_b.verified {
-            return CrossingStatus::Mutual;
-        }
         if !self.event.is_verified() {
-            return CrossingStatus::Verified;
+            return CrossingStatus::Mutual;
         }
         CrossingStatus::Recorded
     }
@@ -239,7 +329,7 @@ impl CrossingRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::IdentityCommitment;
+    use crate::identity::Identity;
 
     #[test]
     fn proximity_within_threshold() {
@@ -361,64 +451,91 @@ mod tests {
         assert_eq!(e2.party_a_id, 0);
     }
 
-    #[test]
-    fn crossing_fully_verified() {
+    fn proofs() -> (
+        ChallengeProof,
+        ChallengeProof,
+        ProximityProof,
+        PresenceEvent,
+    ) {
         let a = VivaldiCoord::new(0.0, 0.0);
         let b = VivaldiCoord::new(1.0, 0.0);
         let prox = ProximityProof::prove(&a, &b, 10.0);
-        let ca = IdentityCommitment::new(42, 1, 100);
-        let cb = IdentityCommitment::new(99, 2, 100);
-        let pa = ZkProof::prove(42, &ca, 0xAA);
-        let pb = ZkProof::prove(99, &cb, 0xBB);
-        let mut event = PresenceEvent::new(1, 2, 100);
+        let id_a = Identity::from_seed([1; 32]);
+        let id_b = Identity::from_seed([2; 32]);
+        let ch_a = Challenge::from_seed([0xAA; 32]);
+        let ch_b = Challenge::from_seed([0xBB; 32]);
+        let event = PresenceEvent::new(1, 2, 100);
+        let t = encounter_transcript(
+            &event,
+            &prox,
+            &id_a.public_key(),
+            &id_b.public_key(),
+            &ch_a,
+            &ch_b,
+        );
+        (
+            ChallengeProof::prove(&id_a, ch_a, &t),
+            ChallengeProof::prove(&id_b, ch_b, &t),
+            prox,
+            event,
+        )
+    }
+
+    #[test]
+    fn crossing_status_recorded() {
+        let (pa, pb, prox, mut event) = proofs();
         event.set_mutual();
         event.set_verified();
         event.set_proximate();
         let record = CrossingRecord::new(event, pa, pb, prox);
-        assert!(record.is_fully_verified());
         assert_eq!(record.status(), CrossingStatus::Recorded);
     }
 
     #[test]
     fn crossing_not_mutual() {
-        let a = VivaldiCoord::new(0.0, 0.0);
-        let b = VivaldiCoord::new(1.0, 0.0);
-        let prox = ProximityProof::prove(&a, &b, 10.0);
-        let ca = IdentityCommitment::new(42, 1, 100);
-        let cb = IdentityCommitment::new(99, 2, 100);
-        let pa = ZkProof::prove(42, &ca, 0xAA);
-        let pb = ZkProof::prove(99, &cb, 0xBB);
-        let event = PresenceEvent::new(1, 2, 100);
+        let (pa, pb, prox, event) = proofs();
         let record = CrossingRecord::new(event, pa, pb, prox);
         assert_eq!(record.status(), CrossingStatus::Initiated);
     }
 
     #[test]
     fn crossing_mutual_but_not_verified_flag() {
-        let a = VivaldiCoord::new(0.0, 0.0);
-        let b = VivaldiCoord::new(1.0, 0.0);
-        let prox = ProximityProof::prove(&a, &b, 10.0);
-        let ca = IdentityCommitment::new(42, 1, 100);
-        let cb = IdentityCommitment::new(99, 2, 100);
-        let pa = ZkProof::prove(42, &ca, 0xAA);
-        let pb = ZkProof::prove(99, &cb, 0xBB);
-        let mut event = PresenceEvent::new(1, 2, 100);
+        let (pa, pb, prox, mut event) = proofs();
         event.set_mutual();
         let record = CrossingRecord::new(event, pa, pb, prox);
-        assert_eq!(record.status(), CrossingStatus::Verified);
+        assert_eq!(record.status(), CrossingStatus::Mutual);
     }
 
     #[test]
-    fn crossing_content_hash_nonzero() {
-        let a = VivaldiCoord::new(0.0, 0.0);
-        let b = VivaldiCoord::new(1.0, 0.0);
-        let prox = ProximityProof::prove(&a, &b, 10.0);
-        let ca = IdentityCommitment::new(1, 1, 0);
-        let cb = IdentityCommitment::new(2, 2, 0);
-        let pa = ZkProof::prove(1, &ca, 10);
-        let pb = ZkProof::prove(2, &cb, 20);
-        let event = PresenceEvent::new(1, 2, 0);
+    fn crossing_content_hash_nonzero_and_recomputable() {
+        let (pa, pb, prox, event) = proofs();
         let record = CrossingRecord::new(event, pa, pb, prox);
         assert_ne!(record.content_hash, 0);
+        assert_eq!(record.content_hash, record.compute_content_hash());
+    }
+
+    #[test]
+    fn transcript_ignores_verified_flag_only() {
+        let (pa, pb, prox, mut event) = proofs();
+        let r0 = CrossingRecord::new(event, pa, pb, prox);
+        event.set_verified();
+        let r1 = CrossingRecord::new(event, pa, pb, prox);
+        assert_eq!(r0.transcript(), r1.transcript());
+        event.set_mutual();
+        let r2 = CrossingRecord::new(event, pa, pb, prox);
+        assert_ne!(r0.transcript(), r2.transcript());
+    }
+
+    #[test]
+    fn proximity_canonical_bytes_match_content_hash() {
+        let prox = ProximityProof::prove(
+            &VivaldiCoord::new(1.0, 2.0),
+            &VivaldiCoord::new(3.0, 4.0),
+            10.0,
+        );
+        assert!(prox.content_hash_matches());
+        let mut tampered = prox;
+        tampered.distance += 1.0;
+        assert!(!tampered.content_hash_matches());
     }
 }

@@ -15,9 +15,34 @@
 
 //! ALICE-Presence — Phase synchronization of presence
 //!
-//! Cryptographic proof of encounter via ZKP, Vivaldi coordinates,
+//! Proof of encounter via Ed25519 challenge-response, Vivaldi coordinates,
 //! and minimal P2P sync. Provides session FSM, group proximity,
 //! and spatial indexing for efficient multi-party presence detection.
+//!
+//! # Security model (read this before relying on a record)
+//!
+//! What a verified [`CrossingRecord`] proves:
+//!
+//! - Both parties hold the Ed25519 private key behind the public key stored in
+//!   their [`ChallengeProof`], and each of them signed the *same* transcript
+//!   (party ids, timestamp, proximity payload, both public keys, both
+//!   challenges). Tampering with any of those after signing invalidates the
+//!   signatures; splicing a proof from another encounter fails because the
+//!   transcript (and the verifier-issued challenge) differ.
+//! - Verification is done by the verifier — there is no self-reported
+//!   "verified" field anywhere in the record.
+//!
+//! What it does **not** prove:
+//!
+//! - It is **not zero-knowledge**: both public keys are part of the record.
+//! - Proximity is a mutual *attestation* of self-reported Vivaldi coordinates,
+//!   not distance bounding. A party can lie about its own coordinate.
+//! - The `content_hash` / `coord_hash_*` / `session_id` values are BLAKE3
+//!   derived identifiers for de-duplication and storage; they authenticate
+//!   nothing. Integrity comes from the two signatures only.
+//! - Identity binding to a real person / device is out of scope: the verifier
+//!   must learn the expected public keys out of band and use
+//!   [`verification::verify_record_with_keys`].
 //!
 //! # Modules
 //!
@@ -25,8 +50,9 @@
 //! |--------|-------------|
 //! | [`event`] | Proximity events, crossing records, presence proofs |
 //! | [`group`] | Group proximity detection and multi-party proofs |
-//! | [`identity`] | Identity commitments and ZKP structures |
+//! | [`identity`] | Ed25519 identities, verifier challenges, challenge-response proofs |
 //! | [`protocol`] | End-to-end presence protocol execution |
+//! | [`verification`] | Verifier-side record checks (signatures, proximity, ids) |
 //! | [`session`] | Session FSM (Idle → Discovered → Exchanging → Verified → Closed) |
 //! | [`spatial`] | KD-tree spatial index for range queries |
 //! | [`vivaldi`] | Vivaldi network coordinate system |
@@ -34,14 +60,21 @@
 //! # Quick Start
 //!
 //! ```rust
-//! use alice_presence::{VivaldiCoord, PartyInfo, PresenceConfig, execute_presence_protocol};
+//! use alice_presence::{
+//!     execute_presence_protocol, verify_record, ExchangeChallenges, Identity, PartyInfo,
+//!     PresenceConfig, VerifyResult, VivaldiCoord,
+//! };
 //!
-//! let a = PartyInfo::new(VivaldiCoord::new(0.0, 0.0), 42, 1);
-//! let b = PartyInfo::new(VivaldiCoord::new(1.0, 1.0), 99, 2);
+//! let id_a = Identity::from_seed([1u8; 32]);
+//! let id_b = Identity::from_seed([2u8; 32]);
+//! let a = PartyInfo::new(VivaldiCoord::new(0.0, 0.0), &id_a, 1);
+//! let b = PartyInfo::new(VivaldiCoord::new(1.0, 1.0), &id_b, 2);
+//! // In a real exchange each side draws its challenge with `ExchangeChallenges::random()`.
+//! let challenges = ExchangeChallenges::from_seed([7u8; 32]);
 //! let cfg = PresenceConfig::default();
 //!
-//! let record = execute_presence_protocol(&a, &b, 1000, &cfg).unwrap();
-//! assert!(record.is_fully_verified());
+//! let record = execute_presence_protocol(&a, &b, &challenges, 1000, &cfg).unwrap();
+//! assert_eq!(verify_record(&record), VerifyResult::Valid);
 //! ```
 
 pub mod event;
@@ -57,23 +90,28 @@ pub mod vivaldi;
 
 pub use event::{CrossingRecord, CrossingStatus, PresenceEvent, ProximityProof};
 pub use group::{GroupConfig, GroupProximityProof, PresenceGroup};
-pub use identity::{IdentityCommitment, ZkProof};
-pub use protocol::{execute_presence_protocol, PartyInfo, PresenceConfig};
+pub use identity::{Challenge, ChallengeProof, Identity, ProofError, PublicKey};
+pub use protocol::{execute_presence_protocol, ExchangeChallenges, PartyInfo, PresenceConfig};
 pub use session::{CloseReason, Session, SessionConfig, SessionState};
 pub use spatial::{KdTree, SpatialEntry};
+pub use verification::{verify_record, verify_record_with_keys, VerifyResult};
 pub use vivaldi::VivaldiCoord;
 
 // ── Shared hash primitive ──────────────────────────────────────────────
 
-/// Standard FNV-1a 64-bit hash.
-#[inline(always)]
-pub(crate) fn fnv1a(data: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for &byte in data {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
+/// 64-bit identifier hash: the first 8 bytes of BLAKE3.
+///
+/// Used for `session_id` / `coord_hash_*` / `content_hash` / replay nonces.
+/// These are **identifiers** (de-duplication, storage keys), not
+/// authentication: nothing in this crate treats a matching `hash64` as proof
+/// of anything. Integrity of a record comes from its Ed25519 signatures.
+#[inline]
+#[must_use]
+pub(crate) fn hash64(data: &[u8]) -> u64 {
+    let digest = blake3::hash(data);
+    let mut out = [0u8; 8];
+    out.copy_from_slice(&digest.as_bytes()[..8]);
+    u64::from_le_bytes(out)
 }
 
 // ── Integration tests ──────────────────────────────────────────────────
@@ -83,14 +121,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fnv1a_empty() {
-        let h = fnv1a(&[]);
-        assert_eq!(h, 0xcbf29ce484222325);
+    fn hash64_is_blake3_prefix() {
+        let h = hash64(b"hello");
+        let full = blake3::hash(b"hello");
+        assert_eq!(h.to_le_bytes(), full.as_bytes()[..8]);
     }
 
     #[test]
-    fn fnv1a_deterministic() {
-        assert_eq!(fnv1a(b"hello"), fnv1a(b"hello"));
+    fn hash64_deterministic_and_input_sensitive() {
+        assert_eq!(hash64(b"hello"), hash64(b"hello"));
+        assert_ne!(hash64(b"hello"), hash64(b"hellp"));
+        assert_ne!(hash64(&[]), 0);
     }
 
     #[test]
@@ -99,17 +140,20 @@ mod tests {
         let mut sess = Session::new(1, 1000, SessionConfig::default());
         assert!(sess.discover(2, 2000));
 
-        let a = PartyInfo::new(VivaldiCoord::new(0.0, 0.0), 42, 1);
-        let b = PartyInfo::new(VivaldiCoord::new(1.0, 1.0), 99, 2);
+        let id_a = Identity::from_seed([1u8; 32]);
+        let id_b = Identity::from_seed([2u8; 32]);
+        let a = PartyInfo::new(VivaldiCoord::new(0.0, 0.0), &id_a, 1);
+        let b = PartyInfo::new(VivaldiCoord::new(1.0, 1.0), &id_b, 2);
         let cfg = PresenceConfig::default();
+        let challenges = ExchangeChallenges::from_seed([9u8; 32]);
 
         // Proximity OK → begin exchange
         assert!(sess.begin_exchange(3000));
 
-        let record = execute_presence_protocol(&a, &b, 3000, &cfg).unwrap();
-        assert!(record.is_fully_verified());
+        let record = execute_presence_protocol(&a, &b, &challenges, 3000, &cfg).unwrap();
+        assert_eq!(verify_record(&record), VerifyResult::Valid);
 
-        // ZKP OK → verified
+        // both signatures OK → verified
         assert!(sess.verify(4000));
         assert!(sess.close(CloseReason::Success, 5000));
         assert_eq!(sess.state, SessionState::Closed);

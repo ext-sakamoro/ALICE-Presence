@@ -3,7 +3,8 @@
 //! 実行: `cargo run --example presence_demo`
 
 use alice_presence::{
-    execute_presence_protocol, GroupConfig, PartyInfo, PresenceConfig, PresenceGroup, VivaldiCoord,
+    execute_presence_protocol, verify_record, verify_record_with_keys, ExchangeChallenges,
+    GroupConfig, Identity, PartyInfo, PresenceConfig, PresenceGroup, VivaldiCoord,
 };
 
 fn banner(title: &str) {
@@ -13,18 +14,25 @@ fn banner(title: &str) {
 fn main() {
     let cfg = PresenceConfig::default();
     println!(
-        "PresenceConfig: threshold={}, challenge_bits={}, require_mutual={}",
-        cfg.proximity_threshold, cfg.challenge_bits, cfg.require_mutual
+        "PresenceConfig: threshold={}, require_mutual={}",
+        cfg.proximity_threshold, cfg.require_mutual
     );
 
-    let alice = PartyInfo::new(VivaldiCoord::new(0.0, 0.0), 0xA11C_E5EC, 1);
-    let bob = PartyInfo::new(VivaldiCoord::new(3.0, 4.0), 0x0B0B_5EC0, 2);
-    let charlie = PartyInfo::new(VivaldiCoord::new(80.0, 80.0), 0x0C4A_5EC0, 3);
+    // 各自の Ed25519 鍵 (本番は Identity::generate(&mut OsRng) を各端末で)
+    let id_alice = Identity::from_seed([0xA1; 32]);
+    let id_bob = Identity::from_seed([0xB0; 32]);
+    let id_charlie = Identity::from_seed([0xC4; 32]);
+    let alice = PartyInfo::new(VivaldiCoord::new(0.0, 0.0), &id_alice, 1);
+    let bob = PartyInfo::new(VivaldiCoord::new(3.0, 4.0), &id_bob, 2);
+    let charlie = PartyInfo::new(VivaldiCoord::new(80.0, 80.0), &id_charlie, 3);
+
+    // challenge は検証者側が乱数で引く (Bob → Alice 用 / Alice → Bob 用)
+    let challenges = ExchangeChallenges::random(&mut rand_core::OsRng);
 
     let ts_ns: u64 = 1_723_000_000_000_000_000;
 
     banner("Case 1: Alice ↔ Bob (近接 = 距離 5.0 ≤ 10.0)");
-    match execute_presence_protocol(&alice, &bob, ts_ns, &cfg) {
+    match execute_presence_protocol(&alice, &bob, &challenges, ts_ns, &cfg) {
         Some(rec) => {
             let ev_bytes = rec.event.to_bytes();
             println!(
@@ -34,8 +42,8 @@ fn main() {
             println!("is_proximate     = {}", rec.proximity.is_proximate);
             println!("coord_hash_a     = 0x{:016x}", rec.proximity.coord_hash_a);
             println!("coord_hash_b     = 0x{:016x}", rec.proximity.coord_hash_b);
-            println!("proof_a.verified = {}", rec.proof_a.verified);
-            println!("proof_b.verified = {}", rec.proof_b.verified);
+            println!("proof_a.public_key = {:02x?}", &rec.proof_a.public_key[..8]);
+            println!("proof_b.public_key = {:02x?}", &rec.proof_b.public_key[..8]);
             println!(
                 "event.flags      = 0b{:08b}  (mutual={}, verified={}, proximate={})",
                 rec.event.flags,
@@ -45,14 +53,22 @@ fn main() {
             );
             println!("18-byte wire     = {ev_bytes:02x?}");
             println!("record content_hash = 0x{:016x}", rec.content_hash);
-            println!("is_fully_verified = {}", rec.is_fully_verified());
+            println!("verify_record    = {:?}", verify_record(&rec));
+            println!(
+                "with pinned keys = {:?}",
+                verify_record_with_keys(&rec, &id_alice.public_key(), &id_bob.public_key())
+            );
+            // 攻撃者: 秘密鍵なしで timestamp を書き換える → 署名が落ちる
+            let mut forged = rec;
+            forged.event.timestamp_ns += 1;
+            println!("tampered record  = {:?}", verify_record(&forged));
             println!("status           = {:?}", rec.status());
         }
         None => println!("(NOT proximate — 記録なし)"),
     }
 
     banner("Case 2: Alice ↔ Charlie (遠い = 距離 ≈113 > 10.0)");
-    match execute_presence_protocol(&alice, &charlie, ts_ns, &cfg) {
+    match execute_presence_protocol(&alice, &charlie, &challenges, ts_ns, &cfg) {
         Some(_) => println!("(想定外: 近接判定通過)"),
         None => println!("proximity 未達 → CrossingRecord は None (= 出会いなし)"),
     }

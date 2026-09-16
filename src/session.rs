@@ -6,7 +6,7 @@
 //!
 //! Author: Moroya Sakamoto
 
-use crate::fnv1a;
+use crate::hash64;
 
 /// Session state in the presence protocol FSM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,7 +16,7 @@ pub enum SessionState {
     Idle = 0,
     /// Peer discovered; proximity check in progress.
     Discovering = 1,
-    /// ZKP identity exchange in progress.
+    /// Challenge-response identity exchange in progress.
     Exchanging = 2,
     /// Both parties verified; crossing recorded.
     Verified = 3,
@@ -35,7 +35,7 @@ pub enum CloseReason {
     Cancelled,
     /// Proximity check failed.
     ProximityFailed,
-    /// ZKP verification failed.
+    /// Signature verification failed.
     VerificationFailed,
 }
 
@@ -92,7 +92,7 @@ impl Session {
         let mut buf = [0u8; 12];
         buf[..4].copy_from_slice(&local_id.to_le_bytes());
         buf[4..12].copy_from_slice(&timestamp_ns.to_le_bytes());
-        let session_id = fnv1a(&buf);
+        let session_id = hash64(&buf);
 
         let mut s = Self {
             session_id,
@@ -135,7 +135,7 @@ impl Session {
         true
     }
 
-    /// Transition: Exchanging → Verified (ZKP OK).
+    /// Transition: Exchanging → Verified (both signatures OK).
     pub fn verify(&mut self, timestamp_ns: u64) -> bool {
         if self.state != SessionState::Exchanging {
             return false;
@@ -207,7 +207,7 @@ impl Session {
         buf[9..13].copy_from_slice(&self.local_id.to_le_bytes());
         buf[13..21].copy_from_slice(&self.state_entered_ns.to_le_bytes());
         buf[21..25].copy_from_slice(&self.retries.to_le_bytes());
-        self.content_hash = fnv1a(&buf);
+        self.content_hash = hash64(&buf);
     }
 }
 

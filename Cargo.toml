@@ -1,14 +1,18 @@
 [package]
 name = "alice-presence"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Moroya Sakamoto <sakamoro@alicelaw.net>"]
-description = "Phase synchronization of presence — cryptographic proof of encounter via ZKP, Vivaldi coordinates, and minimal P2P sync"
+description = "Phase synchronization of presence — proof of encounter via Ed25519 challenge-response, Vivaldi coordinates, and minimal P2P sync"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/ext-sakamoro/ALICE-Presence"
-keywords = ["presence", "zkp", "vivaldi", "p2p", "proximity"]
+keywords = ["presence", "ed25519", "vivaldi", "p2p", "proximity"]
 
 [dependencies]
+# 暗号 primitive は自作しない: 署名 = Ed25519 (dalek)、hash = BLAKE3
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "rand_core", "zeroize"] }
+blake3 = { version = "1", default-features = false }
+rand_core = { version = "0.6", features = ["getrandom"] }
 
 [profile.release]
 opt-level = 3

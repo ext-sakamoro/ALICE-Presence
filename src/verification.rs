@@ -1,72 +1,96 @@
-//! Crossing record 完全性検証。
+//! Verifier-side checks for `CrossingRecord`
 //!
-//! `CrossingRecord` の content hash を再計算し、改ざんの有無を検出する。
-//! また `ProximityProof` の content hash も独立検証可能。
+//! A record is trusted only after this module says so. The order of checks
+//! is deliberate: the two Ed25519 signatures are what authenticate the
+//! record; the identifier hashes are checked last and only guard against
+//! storage corruption.
+//!
+//! Author: Moroya Sakamoto
 
 use crate::event::{CrossingRecord, ProximityProof};
-use crate::fnv1a;
+use crate::identity::PublicKey;
 
-/// 検証結果。
+/// Outcome of [`verify_record`] / [`verify_record_with_keys`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VerifyResult {
-    /// content hash が一致。
+    /// Both signatures verify over the record's transcript, the parties were
+    /// proximate, and the identifier hashes are consistent.
     Valid,
-    /// content hash 不一致（改ざん疑い）。
-    HashMismatch,
-    /// ZKP 未検証。
-    ZkpNotVerified,
-    /// 近接未確認。
+    /// Party A's proof does not verify (wrong key, wrong challenge, or the
+    /// transcript was altered after signing).
+    SignatureInvalidA,
+    /// Party B's proof does not verify.
+    SignatureInvalidB,
+    /// A public key inside the record differs from the one the verifier
+    /// expected ([`verify_record_with_keys`] only).
+    KeyMismatch,
+    /// Proximity was not attested.
     NotProximate,
+    /// An identifier hash (`content_hash` of the record or the proximity
+    /// payload) does not match its payload — storage corruption or a
+    /// half-applied edit. Signatures already passed at this point.
+    HashMismatch,
 }
 
-/// `ProximityProof` の content hash を再計算し検証。
+/// Recompute the `ProximityProof` identifier hash.
 #[must_use]
 pub fn verify_proximity(proof: &ProximityProof) -> bool {
-    let mut buf = [0u8; 40];
-    buf[..8].copy_from_slice(&proof.distance.to_le_bytes());
-    buf[8..16].copy_from_slice(&proof.threshold.to_le_bytes());
-    buf[16..24].copy_from_slice(&proof.coord_hash_a.to_le_bytes());
-    buf[24..32].copy_from_slice(&proof.coord_hash_b.to_le_bytes());
-    buf[32..40].copy_from_slice(&(proof.is_proximate as u64).to_le_bytes());
-    let expected = fnv1a(&buf);
-    expected == proof.content_hash
+    proof.content_hash_matches()
 }
 
-/// `CrossingRecord` の content hash を再計算し検証。
+/// Recompute the `CrossingRecord` identifier hash.
 #[must_use]
 pub fn verify_record_hash(record: &CrossingRecord) -> bool {
-    let ev_bytes = record.event.to_bytes();
-    let mut buf = Vec::with_capacity(18 + 8 * 4);
-    buf.extend_from_slice(&ev_bytes);
-    buf.extend_from_slice(&record.proof_a.response.to_le_bytes());
-    buf.extend_from_slice(&record.proof_b.response.to_le_bytes());
-    buf.extend_from_slice(&record.proximity.content_hash.to_le_bytes());
-    buf.extend_from_slice(&record.proximity.distance.to_le_bytes());
-    let expected = fnv1a(&buf);
-    expected == record.content_hash
+    record.compute_content_hash() == record.content_hash
 }
 
-/// `CrossingRecord` の総合検証。
+/// Full verification against whatever keys the record carries.
 ///
-/// 1. content hash 一致
-/// 2. 両方の ZKP が verified
-/// 3. proximity が確認済み
-/// 4. proximity proof の content hash も検証
+/// Use this when the verifier is one of the two parties (it already knows
+/// the counterpart's key from the exchange) or when any two valid keys are
+/// acceptable. To pin the keys, use [`verify_record_with_keys`].
 #[must_use]
 pub fn verify_record(record: &CrossingRecord) -> VerifyResult {
-    if !verify_record_hash(record) {
-        return VerifyResult::HashMismatch;
+    let transcript = record.transcript();
+    if record
+        .proof_a
+        .verify(&record.proof_a.challenge, &transcript)
+        .is_err()
+    {
+        return VerifyResult::SignatureInvalidA;
     }
-    if !record.proof_a.verified || !record.proof_b.verified {
-        return VerifyResult::ZkpNotVerified;
+    if record
+        .proof_b
+        .verify(&record.proof_b.challenge, &transcript)
+        .is_err()
+    {
+        return VerifyResult::SignatureInvalidB;
     }
     if !record.proximity.is_proximate {
         return VerifyResult::NotProximate;
     }
-    if !verify_proximity(&record.proximity) {
+    if !verify_proximity(&record.proximity) || !verify_record_hash(record) {
         return VerifyResult::HashMismatch;
     }
     VerifyResult::Valid
+}
+
+/// [`verify_record`] plus a requirement that the keys inside the record are
+/// exactly `expected_a` / `expected_b` (learned out of band).
+///
+/// This is the check that stops an attacker from presenting a record made
+/// with their *own* keys while claiming the party ids of someone else: the
+/// ids are just `u32` labels, the keys are the identity.
+#[must_use]
+pub fn verify_record_with_keys(
+    record: &CrossingRecord,
+    expected_a: &PublicKey,
+    expected_b: &PublicKey,
+) -> VerifyResult {
+    if record.proof_a.public_key != *expected_a || record.proof_b.public_key != *expected_b {
+        return VerifyResult::KeyMismatch;
+    }
+    verify_record(record)
 }
 
 // ============================================================================
@@ -76,100 +100,120 @@ pub fn verify_record(record: &CrossingRecord) -> VerifyResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::PresenceEvent;
-    use crate::identity::{IdentityCommitment, ZkProof};
+    use crate::identity::Identity;
+    use crate::protocol::{
+        execute_presence_protocol, ExchangeChallenges, PartyInfo, PresenceConfig,
+    };
     use crate::vivaldi::VivaldiCoord;
 
-    fn make_valid_record() -> CrossingRecord {
-        let a = VivaldiCoord::new(0.0, 0.0);
-        let b = VivaldiCoord::new(1.0, 0.0);
-        let prox = ProximityProof::prove(&a, &b, 10.0);
-        let ca = IdentityCommitment::new(42, 1, 100);
-        let cb = IdentityCommitment::new(99, 2, 100);
-        let pa = ZkProof::prove(42, &ca, 0xAA);
-        let pb = ZkProof::prove(99, &cb, 0xBB);
-        let mut event = PresenceEvent::new(1, 2, 100);
-        event.set_mutual();
-        event.set_verified();
-        event.set_proximate();
-        CrossingRecord::new(event, pa, pb, prox)
+    fn ids() -> (Identity, Identity) {
+        (Identity::from_seed([1; 32]), Identity::from_seed([2; 32]))
+    }
+
+    fn make_valid_record(ia: &Identity, ib: &Identity) -> CrossingRecord {
+        let a = PartyInfo::new(VivaldiCoord::new(0.0, 0.0), ia, 1);
+        let b = PartyInfo::new(VivaldiCoord::new(1.0, 0.0), ib, 2);
+        execute_presence_protocol(
+            &a,
+            &b,
+            &ExchangeChallenges::from_seed([5; 32]),
+            100,
+            &PresenceConfig::default(),
+        )
+        .unwrap()
     }
 
     #[test]
     fn valid_record() {
-        let record = make_valid_record();
+        let (ia, ib) = ids();
+        let record = make_valid_record(&ia, &ib);
         assert_eq!(verify_record(&record), VerifyResult::Valid);
+        assert_eq!(
+            verify_record_with_keys(&record, &ia.public_key(), &ib.public_key()),
+            VerifyResult::Valid
+        );
     }
 
     #[test]
     fn valid_record_hash() {
-        let record = make_valid_record();
-        assert!(verify_record_hash(&record));
+        let (ia, ib) = ids();
+        assert!(verify_record_hash(&make_valid_record(&ia, &ib)));
     }
 
     #[test]
     fn valid_proximity_hash() {
-        let a = VivaldiCoord::new(0.0, 0.0);
-        let b = VivaldiCoord::new(1.0, 0.0);
-        let prox = ProximityProof::prove(&a, &b, 10.0);
+        let prox = ProximityProof::prove(
+            &VivaldiCoord::new(0.0, 0.0),
+            &VivaldiCoord::new(1.0, 0.0),
+            10.0,
+        );
         assert!(verify_proximity(&prox));
     }
 
     #[test]
     fn tampered_record_hash() {
-        let mut record = make_valid_record();
-        record.content_hash ^= 0xDEAD; // 改ざん
+        let (ia, ib) = ids();
+        let mut record = make_valid_record(&ia, &ib);
+        record.content_hash ^= 0xDEAD;
         assert_eq!(verify_record(&record), VerifyResult::HashMismatch);
     }
 
     #[test]
-    fn tampered_proximity_hash() {
-        let a = VivaldiCoord::new(0.0, 0.0);
-        let b = VivaldiCoord::new(1.0, 0.0);
-        let mut prox = ProximityProof::prove(&a, &b, 10.0);
-        prox.content_hash ^= 1; // 改ざん
-        assert!(!verify_proximity(&prox));
+    fn tampered_proximity_hash_only() {
+        let (ia, ib) = ids();
+        let mut record = make_valid_record(&ia, &ib);
+        record.proximity.content_hash ^= 1;
+        // proximity.content_hash is not in the transcript, so signatures still
+        // pass and the identifier check catches it.
+        assert_eq!(verify_record(&record), VerifyResult::HashMismatch);
     }
 
     #[test]
-    fn zkp_not_verified() {
-        let a = VivaldiCoord::new(0.0, 0.0);
-        let b = VivaldiCoord::new(1.0, 0.0);
-        let prox = ProximityProof::prove(&a, &b, 10.0);
-        let ca = IdentityCommitment::new(42, 1, 100);
-        let cb = IdentityCommitment::new(99, 2, 100);
-        // 不正な秘密鍵で proof_a を作成 → verified = false
-        let pa = ZkProof::prove(999, &ca, 0xAA);
-        let pb = ZkProof::prove(99, &cb, 0xBB);
-        let mut event = PresenceEvent::new(1, 2, 100);
-        event.set_mutual();
-        event.set_verified();
-        let record = CrossingRecord::new(event, pa, pb, prox);
-        assert_eq!(verify_record(&record), VerifyResult::ZkpNotVerified);
+    fn tampered_proximity_payload_breaks_signatures() {
+        let (ia, ib) = ids();
+        let mut record = make_valid_record(&ia, &ib);
+        record.proximity.distance = 0.0;
+        assert_eq!(verify_record(&record), VerifyResult::SignatureInvalidA);
     }
 
     #[test]
-    fn not_proximate() {
-        let a = VivaldiCoord::new(0.0, 0.0);
-        let b = VivaldiCoord::new(100.0, 0.0);
-        let prox = ProximityProof::prove(&a, &b, 1.0); // 範囲外
-        let ca = IdentityCommitment::new(42, 1, 100);
-        let cb = IdentityCommitment::new(99, 2, 100);
-        let pa = ZkProof::prove(42, &ca, 0xAA);
-        let pb = ZkProof::prove(99, &cb, 0xBB);
-        let mut event = PresenceEvent::new(1, 2, 100);
-        event.set_mutual();
-        event.set_verified();
-        let record = CrossingRecord::new(event, pa, pb, prox);
+    fn not_proximate_record_from_parts() {
+        // Build a record whose proximity says "not proximate" but is signed
+        // consistently — verify must still reject it.
+        use crate::event::{encounter_transcript, PresenceEvent};
+        use crate::identity::{Challenge, ChallengeProof};
+        let (ia, ib) = ids();
+        let prox = ProximityProof::prove(
+            &VivaldiCoord::new(0.0, 0.0),
+            &VivaldiCoord::new(100.0, 0.0),
+            1.0,
+        );
+        let event = PresenceEvent::new(1, 2, 100);
+        let ca = Challenge::from_seed([1; 32]);
+        let cb = Challenge::from_seed([2; 32]);
+        let t = encounter_transcript(&event, &prox, &ia.public_key(), &ib.public_key(), &ca, &cb);
+        let record = CrossingRecord::new(
+            event,
+            ChallengeProof::prove(&ia, ca, &t),
+            ChallengeProof::prove(&ib, cb, &t),
+            prox,
+        );
         assert_eq!(verify_record(&record), VerifyResult::NotProximate);
     }
 
     #[test]
-    fn tampered_proximity_in_record() {
-        let mut record = make_valid_record();
-        record.proximity.content_hash ^= 1; // proximity hash 改ざん
-                                            // record hash は再計算しないのでまず record hash が不一致
-        assert_eq!(verify_record(&record), VerifyResult::HashMismatch);
+    fn key_mismatch() {
+        let (ia, ib) = ids();
+        let record = make_valid_record(&ia, &ib);
+        let other = Identity::from_seed([9; 32]).public_key();
+        assert_eq!(
+            verify_record_with_keys(&record, &other, &ib.public_key()),
+            VerifyResult::KeyMismatch
+        );
+        assert_eq!(
+            verify_record_with_keys(&record, &ia.public_key(), &other),
+            VerifyResult::KeyMismatch
+        );
     }
 
     #[test]
@@ -180,7 +224,8 @@ mod tests {
 
     #[test]
     fn verify_record_hash_false_on_tamper() {
-        let mut record = make_valid_record();
+        let (ia, ib) = ids();
+        let mut record = make_valid_record(&ia, &ib);
         record.content_hash = 0;
         assert!(!verify_record_hash(&record));
     }

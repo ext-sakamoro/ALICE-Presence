@@ -5,7 +5,7 @@
 //!
 //! Author: Moroya Sakamoto
 
-use crate::fnv1a;
+use crate::hash64;
 use crate::vivaldi::VivaldiCoord;
 
 /// Maximum group size (prevents O(n^2) blowup in proximity checks).
@@ -35,7 +35,10 @@ pub struct GroupProximityProof {
     pub threshold: f64,
     /// True if `max_distance` <= threshold (all pairs proximate).
     pub all_proximate: bool,
-    /// Deterministic content hash.
+    /// Deterministic identifier hash (BLAKE3 prefix) over the fields above.
+    ///
+    /// Group proofs are **unsigned attestations**: they are not authenticated
+    /// by any member key and must not be treated as evidence on their own.
     pub content_hash: u64,
 }
 
@@ -162,7 +165,7 @@ impl PresenceGroup {
         buf[16..24].copy_from_slice(&self.config.proximity_threshold.to_le_bytes());
         buf[24] = self.members.len() as u8;
         buf[25..33].copy_from_slice(&(all_proximate as u64).to_le_bytes());
-        let content_hash = fnv1a(&buf);
+        let content_hash = hash64(&buf);
 
         Some(GroupProximityProof {
             group_id,
@@ -181,7 +184,7 @@ impl PresenceGroup {
         for id in &ids {
             buf.extend_from_slice(&id.to_le_bytes());
         }
-        fnv1a(&buf)
+        hash64(&buf)
     }
 }
 

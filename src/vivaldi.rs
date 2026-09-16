@@ -5,7 +5,7 @@
 //!
 //! Author: Moroya Sakamoto
 
-use crate::fnv1a;
+use crate::hash64;
 
 /// Vivaldi network coordinate (2D + height for error estimation).
 ///
@@ -44,14 +44,18 @@ impl VivaldiCoord {
         dx.hypot(dy) + self.height + other.height
     }
 
-    /// Hash the coordinate for privacy-preserving proofs.
+    /// 64-bit identifier of the coordinate (BLAKE3 prefix).
+    ///
+    /// This hides the raw value from a casual reader only: coordinates have
+    /// little entropy, so a brute-force preimage search over plausible
+    /// coordinates is feasible. Do not treat it as a privacy guarantee.
     #[must_use]
     pub fn hash(&self) -> u64 {
         let mut buf = [0u8; 24];
         buf[..8].copy_from_slice(&self.x.to_le_bytes());
         buf[8..16].copy_from_slice(&self.y.to_le_bytes());
         buf[16..24].copy_from_slice(&self.height.to_le_bytes());
-        fnv1a(&buf)
+        hash64(&buf)
     }
 
     /// Update coordinate toward measured RTT using Vivaldi spring model.

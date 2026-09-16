@@ -3,7 +3,7 @@
 //! 外部依存ゼロの固定フォーマット。マジックナンバーで識別。
 
 use crate::event::{CrossingRecord, PresenceEvent, ProximityProof};
-use crate::identity::ZkProof;
+use crate::identity::ChallengeProof;
 
 /// `ProximityProof` マジック。
 const MAGIC_PROX: [u8; 4] = *b"APRX";
@@ -49,38 +49,21 @@ pub fn deserialize_proximity(data: &[u8]) -> Option<ProximityProof> {
     })
 }
 
-// ── ZkProof helper: 8 + 8 + 8 + 1 = 25 bytes ──
+// ── ChallengeProof: 32 + 32 + 64 = 128 bytes (magic なし、inline) ──
 
-const ZKPROOF_SIZE: usize = 25;
+const PROOF_SIZE: usize = ChallengeProof::SIZE;
 
-fn serialize_zkproof(proof: &ZkProof, buf: &mut Vec<u8>) {
-    buf.extend_from_slice(&proof.challenge.to_le_bytes());
-    buf.extend_from_slice(&proof.response.to_le_bytes());
-    buf.extend_from_slice(&proof.commitment.to_le_bytes());
-    buf.push(u8::from(proof.verified));
+fn deserialize_proof(data: &[u8]) -> Option<ChallengeProof> {
+    let bytes: &[u8; PROOF_SIZE] = data.get(..PROOF_SIZE)?.try_into().ok()?;
+    Some(ChallengeProof::from_bytes(bytes))
 }
 
-fn deserialize_zkproof(data: &[u8]) -> Option<ZkProof> {
-    if data.len() < ZKPROOF_SIZE {
-        return None;
-    }
-    let challenge = u64::from_le_bytes(data[..8].try_into().ok()?);
-    let response = u64::from_le_bytes(data[8..16].try_into().ok()?);
-    let commitment = u64::from_le_bytes(data[16..24].try_into().ok()?);
-    let verified = data[24] != 0;
-    Some(ZkProof {
-        challenge,
-        response,
-        commitment,
-        verified,
-    })
-}
-
-// ── CrossingRecord: 4 + 18 + 25*2 + 41 + 8 = 121 bytes ──
+// ── CrossingRecord: 4 + 18 + 128*2 + 41 + 8 = 327 bytes ──
 // proximity は magic なしで inline 埋め込み (41 bytes)
+// 復元した record は署名未検証、必ず verification::verify_record を通す
 
 /// `CrossingRecord` の固定バイトサイズ。
-pub const CROSSING_RECORD_SIZE: usize = 4 + 18 + ZKPROOF_SIZE * 2 + 41 + 8;
+pub const CROSSING_RECORD_SIZE: usize = 4 + 18 + PROOF_SIZE * 2 + 41 + 8;
 
 /// `CrossingRecord` をバイト列にシリアライズ。
 #[must_use]
@@ -89,10 +72,9 @@ pub fn serialize_crossing(record: &CrossingRecord) -> Vec<u8> {
     buf.extend_from_slice(&MAGIC_CROSS);
     // PresenceEvent (18 bytes)
     buf.extend_from_slice(&record.event.to_bytes());
-    // ZkProof A (17 bytes)
-    serialize_zkproof(&record.proof_a, &mut buf);
-    // ZkProof B (17 bytes)
-    serialize_zkproof(&record.proof_b, &mut buf);
+    // ChallengeProof A / B (128 bytes each)
+    buf.extend_from_slice(&record.proof_a.to_bytes());
+    buf.extend_from_slice(&record.proof_b.to_bytes());
     // ProximityProof inline (41 bytes, magic なし)
     buf.extend_from_slice(&record.proximity.distance.to_le_bytes());
     buf.extend_from_slice(&record.proximity.threshold.to_le_bytes());
@@ -118,13 +100,11 @@ pub fn deserialize_crossing(data: &[u8]) -> Option<CrossingRecord> {
     let event = PresenceEvent::from_bytes(ev_bytes);
     off += 18;
 
-    // ZkProof A
-    let proof_a = deserialize_zkproof(&data[off..off + ZKPROOF_SIZE])?;
-    off += ZKPROOF_SIZE;
-
-    // ZkProof B
-    let proof_b = deserialize_zkproof(&data[off..off + ZKPROOF_SIZE])?;
-    off += ZKPROOF_SIZE;
+    // ChallengeProof A / B
+    let proof_a = deserialize_proof(&data[off..off + PROOF_SIZE])?;
+    off += PROOF_SIZE;
+    let proof_b = deserialize_proof(&data[off..off + PROOF_SIZE])?;
+    off += PROOF_SIZE;
 
     // ProximityProof inline (41 bytes)
     let distance = f64::from_le_bytes(data[off..off + 8].try_into().ok()?);
@@ -167,21 +147,25 @@ pub fn deserialize_crossing(data: &[u8]) -> Option<CrossingRecord> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::IdentityCommitment;
+    use crate::identity::Identity;
+    use crate::protocol::{
+        execute_presence_protocol, ExchangeChallenges, PartyInfo, PresenceConfig,
+    };
     use crate::vivaldi::VivaldiCoord;
 
     fn make_record() -> CrossingRecord {
-        let a = VivaldiCoord::new(0.0, 0.0);
-        let b = VivaldiCoord::new(1.0, 0.0);
-        let prox = ProximityProof::prove(&a, &b, 10.0);
-        let ca = IdentityCommitment::new(42, 1, 100);
-        let cb = IdentityCommitment::new(99, 2, 100);
-        let pa = ZkProof::prove(42, &ca, 0xAA);
-        let pb = ZkProof::prove(99, &cb, 0xBB);
-        let mut event = PresenceEvent::new(1, 2, 100);
-        event.set_mutual();
-        event.set_verified();
-        CrossingRecord::new(event, pa, pb, prox)
+        let ia = Identity::from_seed([1; 32]);
+        let ib = Identity::from_seed([2; 32]);
+        let a = PartyInfo::new(VivaldiCoord::new(0.0, 0.0), &ia, 1);
+        let b = PartyInfo::new(VivaldiCoord::new(1.0, 0.0), &ib, 2);
+        execute_presence_protocol(
+            &a,
+            &b,
+            &ExchangeChallenges::from_seed([3; 32]),
+            100,
+            &PresenceConfig::default(),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -226,10 +210,8 @@ mod tests {
         assert_eq!(restored.event.party_b_id, record.event.party_b_id);
         assert_eq!(restored.event.timestamp_ns, record.event.timestamp_ns);
         assert_eq!(restored.event.flags, record.event.flags);
-        assert_eq!(restored.proof_a.verified, record.proof_a.verified);
-        assert_eq!(restored.proof_b.verified, record.proof_b.verified);
-        assert_eq!(restored.proof_a.response, record.proof_a.response);
-        assert_eq!(restored.proof_b.response, record.proof_b.response);
+        assert_eq!(restored.proof_a, record.proof_a);
+        assert_eq!(restored.proof_b, record.proof_b);
         assert_eq!(restored.content_hash, record.content_hash);
         assert!((restored.proximity.distance - record.proximity.distance).abs() < 1e-12);
     }
@@ -248,8 +230,8 @@ mod tests {
 
     #[test]
     fn crossing_record_size_constant() {
-        // 4 + 18 + 25*2 + 41 + 8 = 121
-        assert_eq!(CROSSING_RECORD_SIZE, 121);
+        // 4 + 18 + 128*2 + 41 + 8 = 327
+        assert_eq!(CROSSING_RECORD_SIZE, 327);
     }
 
     #[test]

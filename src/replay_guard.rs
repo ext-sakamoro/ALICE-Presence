@@ -3,7 +3,7 @@
 //! crossing record のリプレイ攻撃を防止するため、
 //! タイムスタンプの有効期間チェックとnonce重複検出を行う。
 
-use crate::fnv1a;
+use crate::hash64;
 
 /// リプレイガード設定。
 #[derive(Debug, Clone, Copy)]
@@ -82,10 +82,12 @@ impl ReplayGuard {
         TimestampResult::Valid
     }
 
-    /// イベントデータから nonce ハッシュを生成。
+    /// イベントデータから nonce ハッシュ (BLAKE3 先頭 64 bit) を生成。
+    ///
+    /// 重複検出用の識別子であり認証ではない (record の真正性は署名で検証する)
     #[must_use]
     pub fn compute_nonce(event_bytes: &[u8]) -> u64 {
-        fnv1a(event_bytes)
+        hash64(event_bytes)
     }
 
     /// nonce が未使用か検証し、使用済みとして記録。

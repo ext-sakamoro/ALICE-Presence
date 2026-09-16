@@ -35,7 +35,7 @@ cargo doc --no-deps 2>&1 | grep warning
 
 ## Design Constraints
 
-- **Zero external dependencies**: all crypto primitives (FNV-1a, ZKP structures) are self-contained.
+- **No hand-rolled crypto**: signatures come from `ed25519-dalek`, hashing from `blake3`. Do not add a custom hash / MAC / commitment; extend the transcript instead and add an adversarial test in `tests/adversarial.rs`.
 - **Session FSM**: state transitions are enforced at compile time — invalid transitions return `false`.
 - **Vivaldi coordinates**: 2D + height model for network-aware proximity estimation.
 - **KD-tree**: spatial index enables O(log n) range queries for nearby peers.
