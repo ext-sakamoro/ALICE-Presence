@@ -1,10 +1,11 @@
 [package]
 name = "alice-presence"
+publish = false
 version = "0.2.0"
 edition = "2021"
 authors = ["Moroya Sakamoto <sakamoro@alicelaw.net>"]
 description = "Phase synchronization of presence — proof of encounter via Ed25519 challenge-response, Vivaldi coordinates, and minimal P2P sync"
-license = "MIT OR Apache-2.0"
+license = "LicenseRef-Proprietary"
 repository = "https://github.com/ext-sakamoro/ALICE-Presence"
 keywords = ["presence", "ed25519", "vivaldi", "p2p", "proximity"]
 
