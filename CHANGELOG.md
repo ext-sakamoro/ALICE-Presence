@@ -2,6 +2,11 @@
 
 All notable changes to ALICE-Presence will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+- Licence: `MIT OR Apache-2.0` → `LicenseRef-Proprietary`
+
 ## [0.2.0] - 2026-09-16
 
 ### Security
